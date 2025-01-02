@@ -5,6 +5,7 @@ const { storeVectorResult, cachedVectorInformation } = require("../../files");
 const { v4: uuidv4 } = require("uuid");
 const { toChunks, getEmbeddingEngineSelection } = require("../../helpers");
 const { sourceIdentifier } = require("../../chats");
+const { NativeEmbeddingReranker } = require("../../EmbeddingRerankers/native");
 
 const PineconeDB = {
   name: "Pinecone",
@@ -35,6 +36,66 @@ const PineconeDB = {
     const { pineconeIndex } = await this.connect();
     const namespace = await this.namespace(pineconeIndex, _namespace);
     return namespace?.recordCount || 0;
+  },
+  rerankedSimilarityResponse: async function ({
+    client,
+    namespace,
+    query,
+    queryVector,
+    topN = 4,
+    similarityThreshold = 0.25,
+    filterIdentifiers = [],
+  }) {
+    const result = {
+      contextTexts: [],
+      sourceDocuments: [],
+      scores: [],
+    };
+
+    const reranker = new NativeEmbeddingReranker();
+    const totalEmbeddings = await this.namespaceCount(namespace);
+    const searchLimit = Math.max(
+      10,
+      Math.min(50, Math.ceil(totalEmbeddings * 0.1))
+    );
+
+    const pineconeNamespace = client.namespace(namespace);
+    const vectorSearchResults = await pineconeNamespace.query({
+      vector: queryVector,
+      topK: searchLimit,
+      includeMetadata: true,
+    });
+
+    // We need to normalize the response data so Reranker can be used for each provider.
+    // this surfaces the `text` key that is required by the Reranker to sort.
+    const documents = vectorSearchResults.matches.map((match) => ({
+      ...match,
+      text: match.metadata.text,
+    }));
+
+    await reranker
+      .rerank(query, documents, { topK: topN })
+      .then((rerankResults) => {
+        rerankResults.forEach((match) => {
+          if (match.score < similarityThreshold) return;
+          if (filterIdentifiers.includes(sourceIdentifier(match.metadata))) {
+            console.log(
+              "Pinecone: A source was filtered from context as it's parent document is pinned."
+            );
+            return;
+          }
+
+          console.log("Pinecone: Reranked match", match);
+          result.contextTexts.push(match.metadata.text);
+          result.sourceDocuments.push({
+            ...match,
+            metadata: { ...match.metadata, score: match.rerank_score },
+          });
+          result.scores.push(match.score);
+        });
+      });
+
+    return result;
   },
   similarityResponse: async function ({
     client,
@@ -67,7 +128,10 @@ const PineconeDB = {
       }
 
       result.contextTexts.push(match.metadata.text);
-      result.sourceDocuments.push(match);
+      result.sourceDocuments.push({
+        ...match,
+        metadata: { ...match.metadata, score: match.score },
+      });
       result.scores.push(match.score);
     });
 
@@ -243,6 +307,7 @@ const PineconeDB = {
     similarityThreshold = 0.25,
     topN = 4,
     filterIdentifiers = [],
+    rerank = false,
   }) {
     if (!namespace || !input || !LLMConnector)
       throw new Error("Invalid request to performSimilaritySearch.");
@@ -254,15 +319,26 @@ const PineconeDB = {
       );
 
     const queryVector = await LLMConnector.embedTextInput(input);
-    const { contextTexts, sourceDocuments } = await this.similarityResponse({
-      client: pineconeIndex,
-      namespace,
-      queryVector,
-      similarityThreshold,
-      topN,
-      filterIdentifiers,
-    });
+    const result = rerank
+      ? await this.rerankedSimilarityResponse({
+          client: pineconeIndex,
+          namespace,
+          query: input,
+          queryVector,
+          similarityThreshold,
+          topN,
+          filterIdentifiers,
+        })
+      : await this.similarityResponse({
+          client: pineconeIndex,
+          namespace,
+          queryVector,
+          similarityThreshold,
+          topN,
+          filterIdentifiers,
+        });
 
+    const { contextTexts, sourceDocuments } = result;
     const sources = sourceDocuments.map((metadata, i) => {
       return { ...metadata, text: contextTexts[i] };
     });
