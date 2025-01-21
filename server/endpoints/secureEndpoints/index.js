@@ -1,34 +1,54 @@
 const express = require("express");
 const fs = require("fs");
+const path = require("path");
+const msofficePluginPath = path.resolve(__dirname, '..', '..', 'storage', 'plugins', 'msoffice');
+
+function loadMSOfficePlugins(router) {
+  const files = fs.readdirSync(msofficePluginPath);
+  files.forEach((folder) => {
+    if (!fs.statSync(path.resolve(msofficePluginPath, folder)).isDirectory()) return;
+    const pluginTypeFileLocation = path.resolve(msofficePluginPath, folder, '.type');
+    if (!fs.existsSync(pluginTypeFileLocation)) return;
+
+    const [pluginType, pluginId] = fs.readFileSync(pluginTypeFileLocation, 'utf-8').split('\n');
+    if (!['msoffice/powerpoint', 'msoffice/word', 'msoffice/excel'].includes(pluginType)) return;
+
+    console.log(`Dynamically loading plugin: ${folder} of type: ${pluginType} with id: ${pluginId}`);
+    const metadata = path.resolve(msofficePluginPath, folder, 'manifest.xml');
+
+    if (!fs.existsSync(metadata)) {
+      const template = path.resolve(msofficePluginPath, folder, 'manifest.template');
+      if (!fs.existsSync(template)) return;
+      console.error(`Metadata file not found for plugin: ${folder} - generating from template...`);
+      const templateContent = fs.readFileSync(template, 'utf-8');
+      const newMetadata = templateContent
+        .replaceAll('{{PLUGIN_SERVE_FROM}}', `https://localhost:3443/ssl/${pluginType}/${pluginId}`)
+        .replaceAll('{{PLUGIN_ID}}', pluginId);
+      fs.writeFileSync(metadata, newMetadata);
+    };
+
+    router.use(`/${pluginType}/${pluginId}`, express.static(path.resolve(msofficePluginPath, folder)));
+    router.get(`/${pluginType}/${pluginId}/taskpane.html`, (_, response) => {
+      const fileContent = fs.
+        readFileSync(path.resolve(msofficePluginPath, folder, 'taskpane.html'), "utf-8")
+        .replaceAll('"{{ANYTHINGLLM_HOST}}"', JSON.stringify({ host: 'http://localhost:3001' }));
+      return response.send(fileContent);
+    });
+
+    router.get(`/${pluginType}/${pluginId}`, (_, response) => {
+      const fileContent = fs
+        .readFileSync(path.resolve(msofficePluginPath, folder, 'taskpane.html'), "utf-8")
+        .replaceAll('"{{ANYTHINGLLM_HOST}}"', JSON.stringify({ host: 'http://localhost:3001' }));
+      return response.send(fileContent);
+    });
+  });
+}
 
 function secureEndpoints(router) {
   if (!router) return;
-
-  // router.use('/ppt-plugin', express.static("/Users/tim/Documents/anythingllm-msoffice-addins/powerpoint/dist", {
-  //   extensions: ["js", "xml", "css", "json", "map", "png"],
-  //   setHeaders: (res) => {
-  //     res.removeHeader("X-Powered-By");
-  //   },
-  // }));
-
-  // router.get('/ping', (_, response) => {
-  //   response.send('pong');
-  // });
-
-  router.get('/ppt-plugin/taskpane.html', (req, response) => {
-    console.log('taskpane.html');
-    const fileContent = fs
-      .readFileSync("/Users/tim/Documents/anythingllm-msoffice-addins/powerpoint/dist/taskpane.html", "utf-8")
-      .replace('"{{ANYTHINGLLM_HOST}}"', JSON.stringify({ host: 'http://localhost:3001' }));
-    return response.send(fileContent);
-  });
-
-  router.get('/ppt-plugin', (req, response) => {
-    console.log('ppt-plugin');
-    const fileContent = fs
-      .readFileSync("/Users/tim/Documents/anythingllm-msoffice-addins/powerpoint/dist/taskpane.html", "utf-8")
-      .replace('"{{ANYTHINGLLM_HOST}}"', JSON.stringify({ host: 'http://localhost:3001' }));
-    return response.send(fileContent);
+  loadMSOfficePlugins(router);
+  router.get('/ping', (_, response) => {
+    return response.send('pong');
   });
 }
 

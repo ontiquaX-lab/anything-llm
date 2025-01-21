@@ -10,6 +10,7 @@ storage/exports
 storage/imports
 storage/ssl
 storage/plugins/agent-skills/*
+storage/plugins/msoffice/*
 !storage/documents/DOCUMENTS.md
 logs/server.log
 *.db
