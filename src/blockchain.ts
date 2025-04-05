@@ -7,12 +7,24 @@ export class Blockchain {
     private pendingTransactions: Transaction[];
     private difficulty: number;
     private llm: LLMAnalytics;
+    private tokenSupply: number;
+    private tokenAllocations: {
+        presale: number;
+        liquidity: number;
+        mined: number;
+    };
 
     constructor() {
         this.chain = [];
         this.pendingTransactions = [];
         this.difficulty = 2;
         this.llm = new LLMAnalytics();
+        this.tokenSupply = 888880000; // Total ONTI supply
+        this.tokenAllocations = {
+            presale: 444440000, // 50% for presale
+            liquidity: 444440000, // 50% for liquidity
+            mined: 0
+        };
         this.createGenesisBlock();
     }
 
@@ -88,10 +100,39 @@ export class Blockchain {
         if (!this.isValidTransaction(transaction)) {
             throw new Error('Invalid transaction');
         }
+
+        // Apply ONTI token economics rules
+        if (transaction.data?.isPresale) {
+            if (this.tokenAllocations.presale >= transaction.amount) {
+                this.tokenAllocations.presale -= transaction.amount;
+            } else {
+                throw new Error('Insufficient presale allocation');
+            }
+        } else if (transaction.data?.isLiquidity) {
+            if (this.tokenAllocations.liquidity >= transaction.amount) {
+                this.tokenAllocations.liquidity -= transaction.amount;
+            } else {
+                throw new Error('Insufficient liquidity allocation');
+            }
+        }
+
         this.pendingTransactions.push(transaction);
         this.llm.logTransaction(transaction);
     }
 
+    public getTokenEconomics(): {
+        totalSupply: number;
+        allocations: {
+            presale: number;
+            liquidity: number;
+            mined: number;
+        };
+    } {
+        return {
+            totalSupply: this.tokenSupply,
+            allocations: { ...this.tokenAllocations }
+        };
+    }
     private isValidTransaction(tx: Transaction): boolean {
         return (
             tx.sender &&

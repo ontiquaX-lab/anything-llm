@@ -44,17 +44,58 @@ export interface LLMContext {
 
 export interface OntiBlockConfig {
     networkId: string;
-    consensus: 'poa' | 'pos';
+    consensus: 'poa' | 'pos' | 'ai-consensus';
     blockTime: number;
     token: {
         name: string;
         symbol: string;
         decimals: number;
         totalSupply: number;
+        presaleAllocation: number;
+        liquidityAllocation: number;
     };
     llm: {
         enabled: boolean;
         defaultModel: string;
         costPerToken: number;
+        features: {
+            analytics: boolean;
+            predictions: boolean;
+            smartContractAnalysis: boolean;
+            userInsights: boolean;
+        };
     };
+    smartContracts: {
+        enabled: boolean;
+        executionCost: number;
+        llmVerification: boolean;
+    };
+}
+
+export interface SmartContract {
+    id: string;
+    code: string;
+    creator: string;
+    timestamp: number;
+    state: Record<string, any>;
+    llmVerified?: boolean;
+}
+
+export interface AIPrediction {
+    id: string;
+    predictionType: 'market' | 'network' | 'token';
+    data: any;
+    confidence: number;
+    timestamp: number;
+    expiry: number;
+}
+
+export interface UserInsight {
+    userId: string;
+    insights: {
+        portfolioRecommendations?: string[];
+        riskAnalysis?: string;
+        marketTrends?: string;
+    };
+    timestamp: number;
 }
