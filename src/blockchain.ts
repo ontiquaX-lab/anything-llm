@@ -8,22 +8,41 @@ export class Blockchain {
     private difficulty: number;
     private llm: LLMAnalytics;
     private tokenSupply: number;
+    private validators: Map<string, {
+        stakedAmount: number;
+        activeSince: number;
+        lastValidation: number;
+        slashed: boolean;
+        contracts: StakingContract[];
+    }>;
+
+    private stakingContracts: Map<string, StakingContract>;
     private tokenAllocations: {
         presale: number;
         liquidity: number;
         mined: number;
+        stakingRewards: number;
+        feePool: number;
     };
+    private baseFee: number;
+    private priorityFeeRate: number;
 
     constructor() {
         this.chain = [];
         this.pendingTransactions = [];
         this.difficulty = 2;
+        this.validators = new Map();
+        this.stakingContracts = new Map();
         this.llm = new LLMAnalytics();
         this.tokenSupply = 888880000; // Total ONTI supply
+        this.baseFee = 0.001; // Base fee in ONTI
+        this.priorityFeeRate = 0.0001; // Priority fee rate
         this.tokenAllocations = {
             presale: 444440000, // 50% for presale
             liquidity: 444440000, // 50% for liquidity
-            mined: 0
+            mined: 0,
+            stakingRewards: 0,
+            feePool: 0
         };
         this.createGenesisBlock();
     }
@@ -101,6 +120,11 @@ export class Blockchain {
             throw new Error('Invalid transaction');
         }
 
+        // Calculate dynamic fee
+        const fee = this.calculateTransactionFee(transaction);
+        transaction.fee = fee;
+        this.tokenAllocations.feePool += fee;
+
         // Apply ONTI token economics rules
         if (transaction.data?.isPresale) {
             if (this.tokenAllocations.presale >= transaction.amount) {
@@ -120,17 +144,134 @@ export class Blockchain {
         this.llm.logTransaction(transaction);
     }
 
+    private calculateTransactionFee(tx: Transaction): number {
+        // Base fee + (priority fee * tx size)
+        const sizeFactor = JSON.stringify(tx).length / 1000; // Normalize by KB
+        return this.baseFee + (this.priorityFeeRate * sizeFactor);
+    }
+
+    public distributeFees(validatorAddress: string): void {
+        // Distribute 80% to validator, 20% burned
+        const validatorReward = this.tokenAllocations.feePool * 0.8;
+        this.createTransaction({
+            sender: 'fee_pool',
+            recipient: validatorAddress,
+            amount: validatorReward,
+            timestamp: Date.now()
+        });
+        this.tokenSupply -= this.tokenAllocations.feePool * 0.2; // Burn 20%
+        this.tokenAllocations.feePool = 0;
+    }
+
+    public registerValidator(address: string, stakeAmount: number): void {
+        if (stakeAmount < 10000) {
+            throw new Error('Minimum stake amount is 10,000 ONTI');
+        }
+
+        this.validators.set(address, {
+            stakedAmount: stakeAmount,
+            activeSince: Date.now(),
+            lastValidation: 0,
+            slashed: false
+        });
+
+        this.llm.logValidatorRegistration(address, stakeAmount);
+    }
+
+    public createStakingContract(
+        validatorAddress: string,
+        amount: number,
+        durationDays: number
+    ): string {
+        if (!this.validators.has(validatorAddress)) {
+            throw new Error('Validator not registered');
+        }
+
+        const contractId = `stake-${Date.now()}-${validatorAddress}`;
+        const contract = new StakingContract(
+            contractId,
+            validatorAddress,
+            amount,
+            durationDays
+        );
+
+        this.stakingContracts.set(contractId, contract);
+
+        const validator = this.validators.get(validatorAddress);
+        if (validator) {
+            validator.contracts.push(contract);
+            validator.stakedAmount += amount;
+        }
+
+        this.llm.logStakingContractCreation(contractId, validatorAddress, amount, durationDays);
+        return contractId;
+    }
+
+    public distributeRewards(blockHeight: number): void {
+        // Distribute to all active validators
+        this.validators.forEach((validator, address) => {
+            if (validator.slashed) return;
+
+            let totalRewards = 0;
+
+            // Calculate rewards for each staking contract
+            validator.contracts.forEach(contract => {
+                if (contract.active) {
+                    const rewards = contract.calculateRewards(blockHeight);
+                    totalRewards += rewards;
+                    contract.claimedRewards += rewards;
+                }
+            });
+
+            // Create reward transaction
+            if (totalRewards > 0) {
+                this.createTransaction({
+                    sender: 'staking_rewards',
+                    recipient: address,
+                    amount: totalRewards,
+                    timestamp: Date.now(),
+                    data: {
+                        isReward: true,
+                        blockHeight
+                    }
+                });
+            }
+
+            validator.lastValidation = Date.now();
+        });
+
+        this.llm.logRewardDistribution(blockHeight);
+    }
+
+    public getValidatorInfo(address: string): {
+        activeSince: number;
+        lastValidation: number;
+        slashed: boolean;
+        contracts: StakingContract[];
+    } | undefined {
+        return this.validators.get(address);
+    }
     public getTokenEconomics(): {
         totalSupply: number;
         allocations: {
             presale: number;
             liquidity: number;
             mined: number;
+            stakingRewards: number;
+            feePool: number;
+        };
+        currentFees: {
+            baseFee: number;
+            priorityFeeRate: number;
         };
     } {
         return {
             totalSupply: this.tokenSupply,
-            allocations: { ...this.tokenAllocations }
+            allocations: { ...this.tokenAllocations },
+            currentFees: {
+                baseFee: this.baseFee,
+                priorityFeeRate: this.priorityFeeRate
+            }
         };
     }
     private isValidTransaction(tx: Transaction): boolean {
