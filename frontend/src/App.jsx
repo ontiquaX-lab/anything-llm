@@ -1,4 +1,6 @@
 import React, { lazy, Suspense } from "react";
+import BlockchainDashboard from "./pages/BlockchainDashboard";
+import LLMAnalytics from "./pages/LLMAnalytics";
 import { Routes, Route } from "react-router-dom";
 import { I18nextProvider } from "react-i18next";
 import { ContextWrapper } from "@/AuthContext";
@@ -95,6 +97,14 @@ export default function App() {
                   <Route
                     path="/sso/simple"
                     element={<SimpleSSOPassthrough />}
+                  />
+                  <Route
+                    path="/blockchain"
+                    element={<PrivateRoute Component={BlockchainDashboard} />}
+                  />
+                  <Route
+                    path="/llm-analytics"
+                    element={<PrivateRoute Component={LLMAnalytics} />}
                   />
 
                   <Route
